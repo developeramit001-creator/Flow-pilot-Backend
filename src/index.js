@@ -1,5 +1,7 @@
+// src/index.js
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';   // ✅ ADD THIS
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -12,6 +14,7 @@ app.use(cors({
     credentials: true,
 }));
 app.use(express.json());
+app.use(cookieParser());   // ✅ ADD THIS
 
 // Routes
 import authRoutes from './routes/auth.routes.js';
@@ -32,8 +35,7 @@ app.use((req, res) => {
     res.status(404).json({ error: 'Route not found' });
 });
 
-// Start server
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {``
+app.listen(PORT, () => {
     console.log(`🚀 FlowPilot Backend running on http://localhost:${PORT}`);
 });

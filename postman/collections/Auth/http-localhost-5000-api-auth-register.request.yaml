@@ -1,0 +1,21 @@
+$kind: http-request
+name: http://localhost:5000/api/auth/register
+description: ""
+url: http://localhost:5000/api/auth/register
+method: POST
+body:
+  type: json
+  content: "{\r
+
+    \    \"name\": \"Amit Sharma\",\r
+
+    \          \"email\": \"developeramit001@gmail.com\",\r
+
+    \    \"password\": \"SecurePass124\",\r
+
+    \     \"dob\": \"1995-03-15\",\r
+
+    \      \"orgName\": \"FlowuPiloft Inc.\"\r
+
+    }"
+order: 1786771682494

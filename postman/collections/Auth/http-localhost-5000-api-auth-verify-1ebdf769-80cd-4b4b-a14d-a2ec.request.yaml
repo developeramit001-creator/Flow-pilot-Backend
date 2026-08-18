@@ -1,0 +1,6 @@
+$kind: http-request
+name: http://localhost:5000/api/auth/verify/1ebdf769-80cd-4b4b-a14d-a2ecb043ce6b
+description: ""
+url: http://localhost:5000/api/auth/verify/1ebdf769-80cd-4b4b-a14d-a2ecb043ce6b
+method: GET
+order: 1114361219763588
