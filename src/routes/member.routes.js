@@ -692,4 +692,119 @@ router.get('/invite/:token', async (req, res) => {
     }
 });
 
+
+// ============================================
+// 9. GET USER'S INVITES (Dashboard)
+// ============================================
+router.get('/my/invites', authMiddleware, async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        // ✅ Get user's email
+        const userResult = await query(
+            'SELECT email FROM users WHERE id = $1',
+            [userId]
+        );
+
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'USER_NOT_FOUND',
+                message: 'User not found'
+            });
+        }
+
+        const userEmail = userResult.rows[0].email;
+
+        // ✅ Get all pending invites for this email
+        const result = await query(
+            `SELECT
+                i.id, i.email, i.role, i.token, i.status,
+                i.created_at as sent_at, i.expires_at,
+                o.id as organization_id, o.name as organization_name,
+                u.name as inviter_name
+             FROM invites i
+             JOIN organizations o ON o.id = i.organization_id
+             JOIN users u ON u.id = i.invited_by
+             WHERE i.email = $1 AND i.status = $2
+             ORDER BY i.created_at DESC`,
+            [userEmail, 'pending']
+        );
+
+        res.json({
+            success: true,
+            data: {
+                invites: result.rows,
+                total: result.rows.length,
+            },
+        });
+
+    } catch (error) {
+        console.error('Get user invites error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'SERVER_ERROR',
+            message: 'Failed to get invites'
+        });
+    }
+});
+
+// ============================================
+// 10. REJECT INVITE
+// ============================================
+router.delete('/invites/:inviteId/reject', authMiddleware, async (req, res) => {
+    try {
+        const { inviteId } = req.params;
+        const userId = req.user.id;
+
+        // ✅ Get user's email
+        const userResult = await query(
+            'SELECT email FROM users WHERE id = $1',
+            [userId]
+        );
+
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'USER_NOT_FOUND',
+                message: 'User not found'
+            });
+        }
+
+        const userEmail = userResult.rows[0].email;
+
+        // ✅ Check if invite exists and belongs to this user
+        const invite = await query(
+            'SELECT * FROM invites WHERE id = $1 AND email = $2 AND status = $3',
+            [inviteId, userEmail, 'pending']
+        );
+
+        if (invite.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'INVITE_NOT_FOUND',
+                message: 'Invite not found or already processed'
+            });
+        }
+
+        // ✅ Delete invite (reject)
+        await query(
+            'DELETE FROM invites WHERE id = $1',
+            [inviteId]
+        );
+
+        res.json({
+            success: true,
+            message: 'Invite rejected successfully',
+        });
+
+    } catch (error) {
+        console.error('Reject invite error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'SERVER_ERROR',
+            message: 'Failed to reject invite'
+        });
+    }
+});
 export default router;

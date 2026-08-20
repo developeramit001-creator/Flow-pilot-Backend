@@ -124,4 +124,45 @@ router.delete('/:orgId', authMiddleware, async (req, res) => {
     }
 });
 
+
+// ============================================
+// GET USER'S ORGANIZATIONS (Dashboard)
+// ============================================
+router.get('/my/organizations', authMiddleware, async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        // ✅ Get all organizations where user is a member
+        const result = await query(
+            `SELECT
+                o.id, o.name, o.slug, o.logo,
+                m.role, m.status, m.joined_at,
+                o.created_by as owner_id,
+                CASE WHEN o.created_by = $1 THEN true ELSE false END as is_owner
+             FROM organizations o
+             JOIN org_members m ON m.organization_id = o.id
+             WHERE m.user_id = $1 AND m.status = $2
+             ORDER BY m.joined_at DESC`,
+            [userId, 'active']
+        );
+
+        console.log(result, "result==========================================================")
+
+        res.json({
+            success: true,
+            data: {
+                organizations: result.rows,
+                total: result.rows.length,
+            },
+        });
+
+    } catch (error) {
+        console.error('Get user organizations error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'SERVER_ERROR',
+            message: 'Failed to get organizations'
+        });
+    }
+});
 export default router;
