@@ -1,7 +1,7 @@
 // src/index.js
 import express from 'express';
 import cors from 'cors';
-import cookieParser from 'cookie-parser';   // ✅ ADD THIS
+import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -14,16 +14,18 @@ app.use(cors({
     credentials: true,
 }));
 app.use(express.json());
-app.use(cookieParser());   // ✅ ADD THIS
+app.use(cookieParser());
 
 // Routes
 import authRoutes from './routes/auth.routes.js';
 import orgRoutes from './routes/org.routes.js';
 import memberRoutes from './routes/member.routes.js';
+import workflowRoutes from './routes/workflow.routes.js';  // ✅ ADD THIS
 
 app.use('/api/auth', authRoutes);
 app.use('/api/organizations', orgRoutes);
 app.use('/api', memberRoutes);
+app.use('/api/workflows', workflowRoutes);  // ✅ ADD THIS
 
 // Health check
 app.get('/api/health', (req, res) => {
