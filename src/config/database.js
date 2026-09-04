@@ -12,7 +12,7 @@ const pool = new Pool({
     port: process.env.DB_PORT,
 });
 
-// ✅ query function export karo
+// ✅ query function export karoe
 const query = (text, params) => pool.query(text, params);
 
 // ✅ Dono export karo
