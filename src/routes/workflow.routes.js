@@ -194,27 +194,143 @@ router.get('/templates/categories/all', authMiddleware, async (req, res) => {
 // ============================================
 // 4. CREATE WORKFLOW FROM TEMPLATE
 // ============================================
+// ============================================
+// 4. CREATE PROJECT
+// ============================================
+// ============================================
+// CREATE PROJECT / WORKFLOW
+// ============================================
 router.post('/create', authMiddleware, async (req, res) => {
+    let client;
+
     try {
         const userId = req.user.id;
-        const { templateId, organizationId, name, customSteps, assignedTo } = req.body;
 
-        // ✅ Validation
-        if (!templateId || !organizationId) {
+        const {
+            templateId = null,
+            organizationId,
+
+            // Project details
+            name,
+            description,
+            client: projectClient,
+            goal,
+            status = 'planning',
+            priority = 'medium',
+            category,
+            tags,
+            projectHead,
+            timeline,
+            attachments = [],
+
+            // Workflow
+            steps = [],
+            assignedTo = {},
+            stepDeadlines = {},
+            stepAttachments = {},
+
+            // Future workflow-specific fields
+            customFields = {}
+        } = req.body;
+
+        // ============================================
+        // 1. BASIC VALIDATION
+        // ============================================
+
+        if (!organizationId) {
             return res.status(400).json({
                 success: false,
-                error: 'MISSING_FIELDS',
-                message: 'templateId and organizationId are required'
+                error: 'MISSING_ORGANIZATION',
+                message: 'organizationId is required'
             });
         }
 
-        // ✅ Check if user is member of organization
-        const memberCheck = await query(
-            'SELECT id FROM org_members WHERE organization_id = $1 AND user_id = $2 AND status = $3',
+        if (!name || !name.trim()) {
+            return res.status(400).json({
+                success: false,
+                error: 'MISSING_PROJECT_NAME',
+                message: 'Project name is required'
+            });
+        }
+
+        if (!Array.isArray(steps) || steps.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'MISSING_STEPS',
+                message: 'At least one workflow step is required'
+            });
+        }
+
+        // ============================================
+        // 2. VALID PROJECT STATUS
+        // ============================================
+
+        const validProjectStatuses = [
+            'planning',
+            'active',
+            'review',
+            'completed',
+            'on-hold'
+        ];
+
+        if (!validProjectStatuses.includes(status)) {
+            return res.status(400).json({
+                success: false,
+                error: 'INVALID_PROJECT_STATUS',
+                message: 'Invalid project status'
+            });
+        }
+
+        // ============================================
+        // 3. VALID PRIORITY
+        // ============================================
+
+        const validPriorities = [
+            'low',
+            'medium',
+            'high'
+        ];
+
+        if (!validPriorities.includes(priority)) {
+            return res.status(400).json({
+                success: false,
+                error: 'INVALID_PRIORITY',
+                message: 'Invalid project priority'
+            });
+        }
+
+        // ============================================
+        // 4. GET DATABASE CLIENT
+        // ============================================
+
+        // IMPORTANT:
+        // Use one DB connection for the complete transaction.
+        // This prevents project being created without its tasks
+        // if any task insertion fails.
+        const { pool } = await import('../config/database.js');
+
+        client = await pool.connect();
+
+        await client.query('BEGIN');
+
+        // ============================================
+        // 5. CHECK ORGANIZATION MEMBERSHIP
+        // ============================================
+
+        const memberCheck = await client.query(
+            `
+            SELECT id, role
+            FROM org_members
+            WHERE organization_id = $1
+              AND user_id = $2
+              AND status = $3
+            `,
             [organizationId, userId, 'active']
         );
 
         if (memberCheck.rows.length === 0) {
+            await client.query('ROLLBACK');
+
             return res.status(403).json({
                 success: false,
                 error: 'NOT_A_MEMBER',
@@ -222,62 +338,589 @@ router.post('/create', authMiddleware, async (req, res) => {
             });
         }
 
-        // ✅ Get template
-        const templateResult = await query(
-            `SELECT * FROM workflow_templates WHERE id = $1 AND is_active = true`,
-            [templateId]
+        // ============================================
+        // 6. VALIDATE TEMPLATE IF PROVIDED
+        // ============================================
+        //
+        // Template is ONLY the origin/reference.
+        //
+        // We DO NOT copy the current template again here.
+        // Final project steps/settings come from the frontend
+        // and are stored as a project snapshot.
+        //
+        // Therefore, if the template changes later,
+        // this project will NOT change.
+        // ============================================
+
+        if (templateId) {
+            const templateCheck = await client.query(
+                `
+                SELECT id
+                FROM workflow_templates
+                WHERE id = $1
+                  AND is_active = true
+                `,
+                [templateId]
+            );
+
+            if (templateCheck.rows.length === 0) {
+                await client.query('ROLLBACK');
+
+                return res.status(404).json({
+                    success: false,
+                    error: 'TEMPLATE_NOT_FOUND',
+                    message: 'Template not found or inactive'
+                });
+            }
+        }
+
+        // ============================================
+        // 7. VALIDATE PROJECT HEAD
+        // ============================================
+
+        const finalProjectHead = projectHead || userId;
+
+        const projectHeadCheck = await client.query(
+            `
+            SELECT u.id
+            FROM users u
+            INNER JOIN org_members m
+                ON m.user_id = u.id
+            WHERE u.id = $1
+              AND m.organization_id = $2
+              AND m.status = 'active'
+            `,
+            [finalProjectHead, organizationId]
         );
 
-        if (templateResult.rows.length === 0) {
-            return res.status(404).json({
+        if (projectHeadCheck.rows.length === 0) {
+            await client.query('ROLLBACK');
+
+            return res.status(400).json({
                 success: false,
-                error: 'TEMPLATE_NOT_FOUND',
-                message: 'Template not found or inactive'
+                error: 'INVALID_PROJECT_HEAD',
+                message: 'Project head must be an active organization member'
             });
         }
 
-        const template = templateResult.rows[0];
-        const steps = customSteps || template.steps;
-        const workflowName = name || template.name;
-        const workflowId = uuidv4();
+        // ============================================
+        // 8. PROJECT TIMELINE
+        // ============================================
 
-        // ✅ Create user workflow
-        await query(
-            `INSERT INTO user_workflows
-             (id, template_id, organization_id, name, steps, created_by, status, assigned_to)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-            [workflowId, templateId, organizationId, workflowName, steps, userId, 'draft', assignedTo || null]
-        );
+        const projectStartDate = timeline?.start || null;
+        const projectEndDate = timeline?.end || null;
 
-        // ✅ Create tasks for each step
-        for (let i = 0; i < steps.length; i++) {
-            const step = steps[i];
-            const assignedUserId = assignedTo?.[i] || null;
+        if (
+            projectStartDate &&
+            projectEndDate &&
+            new Date(projectStartDate) > new Date(projectEndDate)
+        ) {
+            await client.query('ROLLBACK');
 
-            await query(
-                `INSERT INTO workflow_tasks
-                 (workflow_id, step_index, step_name, assigned_to, status)
-                 VALUES ($1, $2, $3, $4, $5)`,
-                [workflowId, i, step.name, assignedUserId, 'pending']
-            );
+            return res.status(400).json({
+                success: false,
+                error: 'INVALID_PROJECT_TIMELINE',
+                message: 'Project start date cannot be after project end date'
+            });
         }
 
-        res.status(201).json({
+        // ============================================
+        // 9. NORMALIZE TAGS
+        // ============================================
+
+        let normalizedTags = [];
+
+        if (Array.isArray(tags)) {
+            normalizedTags = tags
+                .map(tag => String(tag).trim())
+                .filter(Boolean);
+        } else if (typeof tags === 'string') {
+            normalizedTags = tags
+                .split(',')
+                .map(tag => tag.trim())
+                .filter(Boolean);
+        }
+
+        // ============================================
+        // 10. VALIDATE + NORMALIZE STEPS
+        // ============================================
+
+        const normalizedSteps = [];
+
+        for (let i = 0; i < steps.length; i++) {
+            const step = steps[i];
+
+            if (!step.name || !step.name.trim()) {
+                await client.query('ROLLBACK');
+
+                return res.status(400).json({
+                    success: false,
+                    error: 'INVALID_STEP',
+                    message: `Step ${i + 1} name is required`
+                });
+            }
+
+            if (!step.role || !step.role.trim()) {
+                await client.query('ROLLBACK');
+
+                return res.status(400).json({
+                    success: false,
+                    error: 'INVALID_STEP',
+                    message: `Step ${i + 1} role is required`
+                });
+            }
+
+            const stepStartDate = step.startDate || null;
+            const stepEndDate = step.endDate || null;
+
+            // --------------------------------------------
+            // Step date validation
+            // --------------------------------------------
+
+            if (
+                stepStartDate &&
+                stepEndDate &&
+                new Date(stepStartDate) > new Date(stepEndDate)
+            ) {
+                await client.query('ROLLBACK');
+
+                return res.status(400).json({
+                    success: false,
+                    error: 'INVALID_STEP_DATES',
+                    message: `Step ${i + 1} start date cannot be after end date`
+                });
+            }
+
+            // --------------------------------------------
+            // Step cannot exceed project end
+            // --------------------------------------------
+
+            if (
+                projectEndDate &&
+                stepEndDate &&
+                new Date(stepEndDate) > new Date(projectEndDate)
+            ) {
+                await client.query('ROLLBACK');
+
+                return res.status(400).json({
+                    success: false,
+                    error: 'STEP_EXCEEDS_PROJECT',
+                    message:
+                        `Step ${i + 1} (${step.name}) ends after project end date`
+                });
+            }
+
+            // --------------------------------------------
+            // Assignment
+            // --------------------------------------------
+
+            let assignees = [];
+
+            if (Array.isArray(step.assignees)) {
+                assignees = [
+                    ...new Set(
+                        step.assignees
+                            .filter(Boolean)
+                            .map(id => String(id))
+                    )
+                ];
+            }
+
+            // Backward compatibility with existing frontend
+            const legacyAssignedUser = assignedTo?.[i];
+
+            if (
+                assignees.length === 0 &&
+                legacyAssignedUser
+            ) {
+                assignees = [String(legacyAssignedUser)];
+            }
+
+            // --------------------------------------------
+            // Deadline
+            // --------------------------------------------
+
+            const deadline =
+                step.deadline ||
+                stepDeadlines?.[i] ||
+                null;
+
+            // --------------------------------------------
+            // Attachments
+            // --------------------------------------------
+
+            const stepFiles =
+                Array.isArray(step.attachments)
+                    ? step.attachments
+                    : (
+                        Array.isArray(stepAttachments?.[i])
+                            ? stepAttachments[i]
+                            : []
+                    );
+
+            normalizedSteps.push({
+                name: step.name.trim(),
+                role: step.role.trim(),
+                days: Number(step.days) || 1,
+                assignees,
+                startDate: stepStartDate,
+                endDate: stepEndDate,
+                deadline,
+                attachments: stepFiles
+            });
+        }
+
+        // ============================================
+        // 11. VALIDATE ALL ASSIGNEES
+        // ============================================
+        //
+        // Every assigned user MUST belong to the same
+        // organization and must be an active member.
+        // ============================================
+
+        const allAssigneeIds = [
+            ...new Set(
+                normalizedSteps.flatMap(step => step.assignees)
+            )
+        ];
+
+        if (allAssigneeIds.length > 0) {
+            const assigneeCheck = await client.query(
+                `
+                SELECT u.id
+                FROM users u
+                INNER JOIN org_members m
+                    ON m.user_id = u.id
+                WHERE u.id = ANY($1::uuid[])
+                  AND m.organization_id = $2
+                  AND m.status = 'active'
+                `,
+                [allAssigneeIds, organizationId]
+            );
+
+            const validAssigneeIds =
+                new Set(
+                    assigneeCheck.rows.map(row => row.id)
+                );
+
+            const invalidAssignees =
+                allAssigneeIds.filter(
+                    id => !validAssigneeIds.has(id)
+                );
+
+            if (invalidAssignees.length > 0) {
+                await client.query('ROLLBACK');
+
+                return res.status(400).json({
+                    success: false,
+                    error: 'INVALID_ASSIGNEE',
+                    message:
+                        'One or more assigned users are not active members of this organization'
+                });
+            }
+        }
+
+        // ============================================
+        // 12. CREATE PROJECT
+        // ============================================
+
+        const workflowId = uuidv4();
+
+        /*
+         * IMPORTANT:
+         *
+         * status = 'draft'
+         *
+         * This is the INTERNAL WORKFLOW status.
+         *
+         * project_status = frontend Project Settings status
+         * (planning / active / review / completed / on-hold)
+         *
+         * They are intentionally separate concepts.
+         */
+
+        await client.query(
+            `
+            INSERT INTO user_workflows
+            (
+                id,
+                template_id,
+                organization_id,
+                name,
+                description,
+                client,
+                goal,
+                status,
+                project_status,
+                priority,
+                category,
+                tags,
+                project_head,
+                start_date,
+                end_date,
+                attachments,
+                custom_fields,
+                steps,
+                assigned_to,
+                created_by
+            )
+            VALUES
+            (
+                $1,
+                $2,
+                $3,
+                $4,
+                $5,
+                $6,
+                $7,
+                $8,
+                $9,
+                $10,
+                $11,
+                $12,
+                $13,
+                $14,
+                $15,
+                $16,
+                $17,
+                $18,
+                $19,
+                $20
+            )
+            `,
+            [
+                workflowId,
+                templateId,
+                organizationId,
+                name.trim(),
+                description || null,
+                projectClient || null,
+                goal || null,
+
+                // Internal workflow lifecycle
+                'draft',
+
+                // Project Settings status
+                status,
+
+                priority,
+                category || null,
+                JSON.stringify(normalizedTags),
+                finalProjectHead,
+                projectStartDate,
+                projectEndDate,
+                JSON.stringify(attachments || []),
+                JSON.stringify(customFields || {}),
+
+                // FINAL PROJECT SNAPSHOT
+                JSON.stringify(normalizedSteps),
+
+                // Existing legacy assignment object
+                JSON.stringify(assignedTo || {}),
+
+                userId
+            ]
+        );
+
+        // ============================================
+        // 13. CREATE TASKS + ASSIGN MEMBERS
+        // ============================================
+        //
+        // Example:
+        //
+        // Step 0 -> Script Writing -> Sumit
+        // Step 1 -> Video Editing  -> Amit
+        // Step 2 -> Thumbnail      -> Rahul
+        //
+        // Each task gets the actual user's UUID in
+        // workflow_tasks.assigned_to.
+        // ============================================
+
+        for (let i = 0; i < normalizedSteps.length; i++) {
+            const step = normalizedSteps[i];
+
+            /*
+             * Current workflow_tasks schema supports one
+             * primary assignee per task.
+             *
+             * If multiple assignees are selected later,
+             * the first one becomes the primary task owner.
+             *
+             * Later we can introduce:
+             * workflow_task_assignees
+             * for true many-to-many assignment.
+             */
+            const assignedUserId =
+                step.assignees?.[0] || null;
+
+            await client.query(
+                `
+                INSERT INTO workflow_tasks
+                (
+                    workflow_id,
+                    step_index,
+                    step_name,
+                    role,
+                    duration_days,
+                    assigned_to,
+                    status,
+                    start_date,
+                    end_date,
+                    due_date,
+                    attachments
+                )
+                VALUES
+                (
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    $5,
+                    $6,
+                    $7,
+                    $8,
+                    $9,
+                    $10,
+                    $11
+                )
+                `,
+                [
+                    workflowId,
+                    i,
+                    step.name,
+                    step.role,
+                    step.days,
+                    assignedUserId,
+                    'pending',
+                    step.startDate,
+                    step.endDate,
+
+                    // Task deadline
+                    step.deadline,
+
+                    JSON.stringify(step.attachments || [])
+                ]
+            );
+
+            // ============================================
+            // PUSH NOTIFICATION — FUTURE
+            // ============================================
+            //
+            // Later we will add push notification here.
+            //
+            // Example:
+            //
+            // notifyUser({
+            //     userId: assignedUserId,
+            //     type: 'TASK_ASSIGNED',
+            //     projectId: workflowId,
+            //     taskName: step.name
+            // });
+            //
+            // Notification should happen AFTER the DB
+            // transaction is successfully committed.
+            // ============================================
+        }
+
+        // ============================================
+        // 14. ACTIVITY LOG
+        // ============================================
+
+        await client.query(
+            `
+            INSERT INTO workflow_activity_log
+            (
+                id,
+                workflow_id,
+                user_id,
+                action,
+                details
+            )
+            VALUES
+            ($1, $2, $3, $4, $5)
+            `,
+            [
+                uuidv4(),
+                workflowId,
+                userId,
+                'project_created',
+                JSON.stringify({
+                    projectName: name.trim(),
+                    projectHead: finalProjectHead,
+                    taskCount: normalizedSteps.length,
+                    assignedUsers: allAssigneeIds
+                })
+            ]
+        );
+
+        // ============================================
+        // 15. COMMIT
+        // ============================================
+
+        await client.query('COMMIT');
+
+        // ============================================
+        // 16. PUSH NOTIFICATION — FUTURE
+        // ============================================
+        //
+        // IMPORTANT:
+        // Notifications should be sent AFTER COMMIT.
+        //
+        // Otherwise notification could be sent even if
+        // database transaction fails/rolls back.
+        //
+        // Later:
+        //
+        // await notifyAssignedMembers(...);
+        //
+        // ============================================
+
+        return res.status(201).json({
             success: true,
             data: {
                 workflowId,
-                name: workflowName,
-                message: 'Workflow created successfully'
+                name: name.trim(),
+                projectHead: finalProjectHead,
+                status,
+                priority,
+                taskCount: normalizedSteps.length,
+                message: 'Project created successfully'
             }
         });
 
     } catch (error) {
-        console.error('Create workflow error:', error);
-        res.status(500).json({
+
+        // ============================================
+        // ROLLBACK ON ERROR
+        // ============================================
+
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error(
+                    'Rollback error:',
+                    rollbackError
+                );
+            }
+        }
+
+        console.error(
+            'Create project error:',
+            error
+        );
+
+        return res.status(500).json({
             success: false,
             error: 'SERVER_ERROR',
-            message: 'Failed to create workflow'
+            message: 'Failed to create project'
         });
+
+    } finally {
+
+        if (client) {
+            client.release();
+        }
     }
 });
 
@@ -864,4 +1507,384 @@ router.post('/:workflowId/duplicate', authMiddleware, async (req, res) => {
     }
 });
 
+
+// ============================================
+// GET MY ASSIGNED TASKS
+// ============================================
+router.get('/tasks/my', authMiddleware, async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        const {
+            organizationId,
+            status,
+            page = 1,
+            limit = 20
+        } = req.query;
+
+        const parsedPage = Math.max(parseInt(page) || 1, 1);
+        const parsedLimit = Math.min(
+            Math.max(parseInt(limit) || 20, 1),
+            100
+        );
+
+        const offset = (parsedPage - 1) * parsedLimit;
+
+        let whereClause = `
+            WHERE t.assigned_to = $1
+        `;
+
+        const params = [userId];
+        let paramIndex = 2;
+
+        if (organizationId) {
+            whereClause += `
+                AND w.organization_id = $${paramIndex++}
+            `;
+
+            params.push(organizationId);
+        }
+
+        if (status) {
+            whereClause += `
+                AND t.status = $${paramIndex++}
+            `;
+
+            params.push(status);
+        }
+
+        // ============================================
+        // TOTAL
+        // ============================================
+
+        const countResult = await query(
+            `
+            SELECT COUNT(*)
+            FROM workflow_tasks t
+            INNER JOIN user_workflows w
+                ON w.id = t.workflow_id
+            ${whereClause}
+            `,
+            params
+        );
+
+        const total = parseInt(countResult.rows[0].count);
+
+        // ============================================
+        // TASKS
+        // ============================================
+
+        const result = await query(
+            `
+            SELECT
+                t.id,
+                t.workflow_id,
+                t.step_index,
+                t.step_name,
+                t.role,
+                t.duration_days,
+                t.assigned_to,
+                t.status,
+                t.due_date,
+                t.start_date,
+                t.end_date,
+                t.notes,
+                t.attachments,
+                t.created_at,
+                t.updated_at,
+
+                w.name AS project_name,
+                w.description AS project_description,
+                w.client AS project_client,
+                w.priority AS project_priority,
+                w.category AS project_category,
+                w.project_head,
+                w.start_date AS project_start_date,
+                w.end_date AS project_end_date,
+
+                o.name AS organization_name,
+
+                u.name AS project_head_name,
+                u.email AS project_head_email
+
+            FROM workflow_tasks t
+
+            INNER JOIN user_workflows w
+                ON w.id = t.workflow_id
+
+            LEFT JOIN organizations o
+                ON o.id = w.organization_id
+
+            LEFT JOIN users u
+                ON u.id = w.project_head
+
+            ${whereClause}
+
+            ORDER BY
+                t.start_date ASC NULLS LAST,
+                t.due_date ASC NULLS LAST,
+                t.created_at DESC
+
+            LIMIT $${paramIndex++}
+            OFFSET $${paramIndex++}
+            `,
+            [
+                ...params,
+                parsedLimit,
+                offset
+            ]
+        );
+
+        return res.json({
+            success: true,
+            data: {
+                tasks: result.rows,
+                pagination: {
+                    total,
+                    page: parsedPage,
+                    limit: parsedLimit,
+                    totalPages: Math.ceil(total / parsedLimit),
+                    hasNext:
+                        parsedPage * parsedLimit < total,
+                    hasPrev:
+                        parsedPage > 1
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Get my tasks error:', error);
+
+        return res.status(500).json({
+            success: false,
+            error: 'SERVER_ERROR',
+            message: 'Failed to get assigned tasks'
+        });
+    }
+});
+
+
+
+
+
+
+
+
+
+// ============================================
+// GET SINGLE TASK DETAILS
+// ============================================
+router.get('/task/:taskId/details', authMiddleware, async (req, res) => {
+    try {
+        const { taskId } = req.params;
+        const userId = req.user.id;
+
+        // ✅ Get task with project and organization details
+        const result = await query(
+            `
+            SELECT
+                t.id,
+                t.workflow_id,
+                t.step_index,
+                t.step_name,
+                t.role,
+                t.duration_days,
+                t.assigned_to,
+                t.status,
+                t.due_date,
+                t.start_date,
+                t.end_date,
+                t.notes,
+                t.attachments,
+                t.created_at,
+                t.updated_at,
+
+                w.id AS project_id,
+                w.name AS project_name,
+                w.description AS project_description,
+                w.client AS project_client,
+                w.priority AS project_priority,
+                w.project_status,
+                w.project_head,
+                w.start_date AS project_start_date,
+                w.end_date AS project_end_date,
+
+                o.id AS organization_id,
+                o.name AS organization_name,
+
+                u.id AS assignee_id,
+                u.name AS assignee_name,
+                u.email AS assignee_email,
+
+                ph.id AS project_head_id,
+                ph.name AS project_head_name,
+                ph.email AS project_head_email
+
+            FROM workflow_tasks t
+
+            INNER JOIN user_workflows w
+                ON w.id = t.workflow_id
+
+            INNER JOIN organizations o
+                ON o.id = w.organization_id
+
+            LEFT JOIN users u
+                ON u.id = t.assigned_to
+
+            LEFT JOIN users ph
+                ON ph.id = w.project_head
+
+            WHERE t.id = $1
+            `,
+            [taskId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'TASK_NOT_FOUND',
+                message: 'Task not found'
+            });
+        }
+
+        const task = result.rows[0];
+
+        // ✅ Check if user has access
+        const memberCheck = await query(
+            `SELECT role FROM org_members
+             WHERE organization_id = $1 AND user_id = $2 AND status = $3`,
+            [task.organization_id, userId, 'active']
+        );
+
+        const isMember = memberCheck.rows.length > 0;
+        const isAssigned = task.assigned_to === userId;
+        const isProjectHead = task.project_head === userId;
+
+        if (!isMember && !isAssigned && !isProjectHead) {
+            return res.status(403).json({
+                success: false,
+                error: 'FORBIDDEN',
+                message: 'You do not have access to this task'
+            });
+        }
+
+        res.json({
+            success: true,
+            data: {
+                task: {
+                    id: task.id,
+                    projectId: task.project_id,
+                    projectName: task.project_name,
+                    projectDescription: task.project_description,
+                    projectClient: task.project_client,
+                    projectPriority: task.project_priority,
+                    projectStatus: task.project_status,
+                    projectHead: {
+                        id: task.project_head_id,
+                        name: task.project_head_name,
+                        email: task.project_head_email,
+                    },
+                    organization: {
+                        id: task.organization_id,
+                        name: task.organization_name,
+                    },
+                    stepIndex: task.step_index,
+                    stepName: task.step_name,
+                    role: task.role,
+                    durationDays: task.duration_days,
+                    assignedTo: {
+                        id: task.assignee_id,
+                        name: task.assignee_name,
+                        email: task.assignee_email,
+                        isYou: task.assignee_id === userId,
+                    },
+                    status: task.status,
+                    dueDate: task.due_date,
+                    startDate: task.start_date,
+                    endDate: task.end_date,
+                    notes: task.notes,
+                    attachments: task.attachments || [],
+                    createdAt: task.created_at,
+                    updatedAt: task.updated_at,
+                },
+                userRole: {
+                    isAssigned: isAssigned,
+                    isProjectHead: isProjectHead,
+                    isMember: isMember,
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Get task details error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'SERVER_ERROR',
+            message: 'Failed to get task details'
+        });
+    }
+});
+
+
+ 
+
+// ============================================
+// GET TASK STATS
+// ============================================
+router.get('/tasks/stats', authMiddleware, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { organizationId } = req.query;
+
+        let orgFilter = '';
+        const params = [userId];
+        let paramIndex = 2;
+
+        if (organizationId) {
+            orgFilter = ` AND w.organization_id = $${paramIndex++}`;
+            params.push(organizationId);
+        }
+
+        const result = await query(
+            `
+            SELECT
+                COUNT(*) as total,
+                COUNT(*) FILTER (WHERE t.status = 'pending') as pending,
+                COUNT(*) FILTER (WHERE t.status = 'in_progress') as in_progress,
+                COUNT(*) FILTER (WHERE t.status = 'review') as review,
+                COUNT(*) FILTER (WHERE t.status = 'done') as done,
+                COUNT(*) FILTER (WHERE t.status = 'blocked') as blocked,
+                COUNT(*) FILTER (WHERE t.due_date < NOW() AND t.status NOT IN ('done', 'blocked')) as overdue
+            FROM workflow_tasks t
+            INNER JOIN user_workflows w ON w.id = t.workflow_id
+            WHERE t.assigned_to = $1${orgFilter}
+            `,
+            params
+        );
+
+        res.json({
+            success: true,
+            data: {
+                stats: result.rows[0],
+                totals: {
+                    total: parseInt(result.rows[0].total) || 0,
+                    pending: parseInt(result.rows[0].pending) || 0,
+                    in_progress: parseInt(result.rows[0].in_progress) || 0,
+                    review: parseInt(result.rows[0].review) || 0,
+                    done: parseInt(result.rows[0].done) || 0,
+                    blocked: parseInt(result.rows[0].blocked) || 0,
+                    overdue: parseInt(result.rows[0].overdue) || 0,
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Get task stats error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'SERVER_ERROR',
+            message: 'Failed to get task stats'
+        });
+    }
+});
 export default router;
