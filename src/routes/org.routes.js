@@ -135,18 +135,21 @@ router.get('/my/organizations', authMiddleware, async (req, res) => {
         // ✅ Get all organizations where user is a member
         const result = await query(
             `SELECT
-                o.id, o.name, o.slug, o.logo,
-                m.role, m.status, m.joined_at,
-                o.created_by as owner_id,
-                CASE WHEN o.created_by = $1 THEN true ELSE false END as is_owner
-             FROM organizations o
-             JOIN org_members m ON m.organization_id = o.id
-             WHERE m.user_id = $1 AND m.status = $2
-             ORDER BY m.joined_at DESC`,
+        o.id, o.name, o.slug, o.logo,
+        m.role, m.status, m.joined_at,
+        o.created_by as owner_id,
+        CASE WHEN o.created_by = $1 THEN true ELSE false END as is_owner,
+        (SELECT COUNT(*)::INTEGER
+         FROM user_workflows w
+         WHERE w.organization_id = o.id) as "projectCount"
+     FROM organizations o
+     JOIN org_members m ON m.organization_id = o.id
+     WHERE m.user_id = $1 AND m.status = $2
+     ORDER BY m.joined_at DESC`,
             [userId, 'active']
         );
 
-        console.log(result, "result==========================================================")
+
 
         res.json({
             success: true,

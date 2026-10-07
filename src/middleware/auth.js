@@ -11,6 +11,8 @@ const authMiddleware = async (req, res, next) => {
         // ✅ Cookie se token lo (Authorization header se nahi)
         const token = req.cookies?.accessToken;
 
+
+
         // ✅ Debug (optional)
         // console.log('Cookie:', req.cookies);
         // console.log('Token from cookie:', token);

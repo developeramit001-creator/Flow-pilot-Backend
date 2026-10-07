@@ -536,7 +536,9 @@ router.get('/me', async (req, res) => {
 // ============================================
 router.post('/resend-verification', async (req, res) => {
     try {
+
         const { email } = req.body;
+
 
         if (!email) {
             return res.status(400).json({
@@ -583,7 +585,7 @@ router.post('/resend-verification', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Resend error:', error);
+        // console.error('Resend error:', error);
         res.status(500).json({
             success: false,
             error: 'RESEND_FAILED',
