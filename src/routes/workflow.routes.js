@@ -202,7 +202,7 @@ router.post('/create', authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    console.log(userId, "workflow Crete User Id")
+    console.log(userId, 'workflow Crete User Id');
 
     const {
       templateId = null,
@@ -685,10 +685,7 @@ router.get('/my', authMiddleware, async (req, res) => {
     } = req.query;
 
     const parsedPage = Math.max(parseInt(page) || 1, 1);
-    const parsedLimit = Math.min(
-      Math.max(parseInt(limit) || 20, 1),
-      100,
-    );
+    const parsedLimit = Math.min(Math.max(parseInt(limit) || 20, 1), 100);
 
     const offset = (parsedPage - 1) * parsedLimit;
 
@@ -801,10 +798,7 @@ router.get('/my', authMiddleware, async (req, res) => {
       ? sortBy
       : 'created_at';
 
-    const order =
-      sortOrder.toUpperCase() === 'DESC'
-        ? 'DESC'
-        : 'ASC';
+    const order = sortOrder.toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
 
     // ============================================
     // GET WORKFLOWS
@@ -1044,28 +1038,30 @@ router.get('/:workflowId', authMiddleware, async (req, res) => {
     // ============================================
 
     const check = await query(
-      `SELECT
-                w.*,
-                o.created_by AS organization_owner_id,
+      `
+      SELECT
+        w.*,
+        o.created_by AS organization_owner_id,
 
-                EXISTS (
-                    SELECT 1
-                    FROM workflow_tasks wt
-                    WHERE wt.workflow_id = w.id
-                    AND wt.assigned_to = $2
-                ) AS has_assigned_task
+        EXISTS (
+          SELECT 1
+          FROM workflow_tasks wt
+          WHERE wt.workflow_id = w.id
+            AND wt.assigned_to = $2
+        ) AS has_assigned_task
 
-             FROM user_workflows w
+      FROM user_workflows w
 
-             INNER JOIN organizations o
-                ON o.id = w.organization_id
+      INNER JOIN organizations o
+        ON o.id = w.organization_id
 
-             INNER JOIN org_members m
-                ON m.organization_id = w.organization_id
+      INNER JOIN org_members m
+        ON m.organization_id = w.organization_id
 
-             WHERE w.id = $1
-             AND m.user_id = $2
-             AND m.status = 'active'`,
+      WHERE w.id = $1
+        AND m.user_id = $2
+        AND m.status = 'active'
+      `,
       [workflowId, userId],
     );
 
@@ -1087,31 +1083,26 @@ router.get('/:workflowId', authMiddleware, async (req, res) => {
     // OWNER CHECK
     // ============================================
 
-    const isOrganizationOwner =
-      workflowAccess.organization_owner_id === userId;
+    const isOrganizationOwner = workflowAccess.organization_owner_id === userId;
 
     // ============================================
     // PROJECT HEAD CHECK
     // ============================================
 
-    const isProjectHead =
-      workflowAccess.project_head === userId;
+    const isProjectHead = workflowAccess.project_head === userId;
 
     // ============================================
     // ASSIGNED MEMBER CHECK
     // ============================================
 
-    const isAssignedMember =
-      workflowAccess.has_assigned_task;
+    const isAssignedMember = workflowAccess.has_assigned_task;
 
     // ============================================
     // FINAL ACCESS
     // ============================================
 
     const hasWorkflowAccess =
-      isOrganizationOwner ||
-      isProjectHead ||
-      isAssignedMember;
+      isOrganizationOwner || isProjectHead || isAssignedMember;
 
     if (!hasWorkflowAccess) {
       return res.status(403).json({
@@ -1126,25 +1117,27 @@ router.get('/:workflowId', authMiddleware, async (req, res) => {
     // ============================================
 
     const workflowResult = await query(
-      `SELECT
-                w.*,
-                t.name as template_name,
-                t.icon as template_icon,
-                o.name as organization_name,
-                u.name as created_by_name
+      `
+      SELECT
+        w.*,
+        t.name AS template_name,
+        t.icon AS template_icon,
+        o.name AS organization_name,
+        u.name AS created_by_name
 
-             FROM user_workflows w
+      FROM user_workflows w
 
-             LEFT JOIN workflow_templates t
-                ON w.template_id = t.id
+      LEFT JOIN workflow_templates t
+        ON w.template_id = t.id
 
-             LEFT JOIN organizations o
-                ON w.organization_id = o.id
+      LEFT JOIN organizations o
+        ON w.organization_id = o.id
 
-             LEFT JOIN users u
-                ON w.created_by = u.id
+      LEFT JOIN users u
+        ON w.created_by = u.id
 
-             WHERE w.id = $1`,
+      WHERE w.id = $1
+      `,
       [workflowId],
     );
 
@@ -1167,19 +1160,27 @@ router.get('/:workflowId', authMiddleware, async (req, res) => {
       // ============================================
 
       tasksResult = await query(
-        `SELECT
-                t.*,
-                u.name as assignee_name,
-                u.email as assignee_email
+        `
+        SELECT
+          t.*,
+          u.name AS assignee_name,
+          u.email AS assignee_email,
 
-             FROM workflow_tasks t
+          (
+            SELECT COUNT(*)::INTEGER
+            FROM workflow_comments c
+            WHERE c.task_id = t.id
+          ) AS comment_count
 
-             LEFT JOIN users u
-                ON t.assigned_to = u.id
+        FROM workflow_tasks t
 
-             WHERE t.workflow_id = $1
+        LEFT JOIN users u
+          ON t.assigned_to = u.id
 
-             ORDER BY t.step_index`,
+        WHERE t.workflow_id = $1
+
+        ORDER BY t.step_index
+        `,
         [workflowId],
       );
     } else {
@@ -1189,20 +1190,28 @@ router.get('/:workflowId', authMiddleware, async (req, res) => {
       // ============================================
 
       tasksResult = await query(
-        `SELECT
-                t.*,
-                u.name as assignee_name,
-                u.email as assignee_email
+        `
+        SELECT
+          t.*,
+          u.name AS assignee_name,
+          u.email AS assignee_email,
 
-             FROM workflow_tasks t
+          (
+            SELECT COUNT(*)::INTEGER
+            FROM workflow_comments c
+            WHERE c.task_id = t.id
+          ) AS comment_count
 
-             LEFT JOIN users u
-                ON t.assigned_to = u.id
+        FROM workflow_tasks t
 
-             WHERE t.workflow_id = $1
-             AND t.assigned_to = $2
+        LEFT JOIN users u
+          ON t.assigned_to = u.id
 
-             ORDER BY t.step_index`,
+        WHERE t.workflow_id = $1
+          AND t.assigned_to = $2
+
+        ORDER BY t.step_index
+        `,
         [workflowId, userId],
       );
     }
@@ -1211,7 +1220,7 @@ router.get('/:workflowId', authMiddleware, async (req, res) => {
     // RESPONSE
     // ============================================
 
-    res.json({
+    return res.json({
       success: true,
       data: {
         workflow: workflowResult.rows[0],
@@ -1221,7 +1230,7 @@ router.get('/:workflowId', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Get workflow details error:', error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: 'SERVER_ERROR',
       message: 'Failed to get workflow details',
@@ -1329,19 +1338,104 @@ router.put('/:workflowId', authMiddleware, async (req, res) => {
 });
 
 // ============================================
-// 8. UPDATE TASK STATUS
+// UPDATE TASK STATUS + REMARK
 // ============================================
+
 router.patch('/task/:taskId', authMiddleware, async (req, res) => {
   try {
     const { taskId } = req.params;
     const userId = req.user.id;
     const { status, notes } = req.body;
 
+    // ============================================
+    // 1. VALIDATE STATUS
+    // ============================================
+
+    const validStatuses = [
+      'pending',
+      'in_progress',
+      'review',
+      'done',
+      'blocked',
+    ];
+
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_STATUS',
+        message: 'Please select a valid task status',
+      });
+    }
+
+    // ============================================
+    // 2. VALIDATE REMARK
+    // ============================================
+
+    if (
+      notes !== undefined &&
+      notes !== null &&
+      typeof notes !== 'string'
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_REMARK',
+        message: 'Remark must be a string',
+      });
+    }
+
+    const normalizedNotes =
+      typeof notes === 'string'
+        ? notes.trim()
+        : null;
+
+    if (
+      normalizedNotes !== null &&
+      normalizedNotes.length > 2000
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: 'REMARK_TOO_LONG',
+        message: 'Remark cannot exceed 2000 characters',
+      });
+    }
+
+    // ============================================
+    // 3. BLOCKED STATUS REQUIRES A REASON
+    // ============================================
+
+    if (
+      status === 'blocked' &&
+      !normalizedNotes
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: 'BLOCK_REASON_REQUIRED',
+        message: 'Please explain why this task is blocked',
+      });
+    }
+
+    // ============================================
+    // 4. FETCH TASK AND PROJECT
+    // ============================================
+
     const taskCheck = await query(
-      `SELECT t.*, w.organization_id
-             FROM workflow_tasks t
-             JOIN user_workflows w ON t.workflow_id = w.id
-             WHERE t.id = $1`,
+      `
+      SELECT
+        t.*,
+        w.organization_id,
+        w.project_head,
+        o.created_by AS organization_owner_id
+
+      FROM workflow_tasks t
+
+      INNER JOIN user_workflows w
+        ON w.id = t.workflow_id
+
+      INNER JOIN organizations o
+        ON o.id = w.organization_id
+
+      WHERE t.id = $1
+      `,
       [taskId],
     );
 
@@ -1355,18 +1449,57 @@ router.patch('/task/:taskId', authMiddleware, async (req, res) => {
 
     const task = taskCheck.rows[0];
 
+    // ============================================
+    // 5. CHECK ACTIVE ORGANIZATION MEMBERSHIP
+    // ============================================
+
     const memberCheck = await query(
-      `SELECT role FROM org_members
-             WHERE organization_id = $1 AND user_id = $2 AND status = $3`,
-      [task.organization_id, userId, 'active'],
+      `
+      SELECT id
+      FROM org_members
+
+      WHERE organization_id = $1
+        AND user_id = $2
+        AND status = 'active'
+      `,
+      [task.organization_id, userId],
     );
 
-    // ✅ CHANGE 3: Sirf owner
-    const isOwner =
-      memberCheck.rows.length > 0 && memberCheck.rows[0].role === 'owner';
-    const isAssigned = task.assigned_to === userId;
+    if (memberCheck.rows.length === 0) {
+      return res.status(403).json({
+        success: false,
+        error: 'FORBIDDEN',
+        message: 'You are not an active member of this organization',
+      });
+    }
 
-    if (!isAssigned && !isOwner) {
+    // ============================================
+    // 6. CHECK PERMISSIONS
+    //
+    // ASSIGNED MEMBER:
+    //   Can update assigned task
+    //
+    // ORGANIZATION OWNER:
+    //   Can update any task in own organization
+    //
+    // PROJECT HEAD:
+    //   Can update tasks in their project
+    // ============================================
+
+    const isOrganizationOwner =
+      task.organization_owner_id === userId;
+
+    const isProjectHead =
+      task.project_head === userId;
+
+    const isAssigned =
+      task.assigned_to === userId;
+
+    if (
+      !isAssigned &&
+      !isOrganizationOwner &&
+      !isProjectHead
+    ) {
       return res.status(403).json({
         success: false,
         error: 'FORBIDDEN',
@@ -1374,30 +1507,121 @@ router.patch('/task/:taskId', authMiddleware, async (req, res) => {
       });
     }
 
+    // ============================================
+    // 7. UPDATE STATUS AND REMARK
+    //
+    // If notes is omitted/null:
+    //   Keep existing remark
+    //
+    // If notes is a string:
+    //   Save the supplied remark
+    // ============================================
+
     const result = await query(
-      `UPDATE workflow_tasks
-             SET status = $1,
-                 notes = COALESCE($2, notes),
-                 updated_at = NOW()
-             WHERE id = $3
-             RETURNING *`,
-      [status, notes, taskId],
+      `
+      UPDATE workflow_tasks
+
+      SET
+        status = $1,
+
+        notes = CASE
+          WHEN $2::text IS NULL THEN notes
+          ELSE $2
+        END,
+
+        started_at = CASE
+          WHEN $1 = 'in_progress'
+            AND started_at IS NULL
+          THEN NOW()
+          ELSE started_at
+        END,
+
+        completed_at = CASE
+          WHEN $1 = 'done'
+          THEN COALESCE(completed_at, NOW())
+          WHEN $1 <> 'done'
+          THEN NULL
+          ELSE completed_at
+        END,
+
+        updated_at = NOW()
+
+      WHERE id = $3
+
+      RETURNING *
+      `,
+      [
+        status,
+        normalizedNotes,
+        taskId,
+      ],
     );
 
-    res.json({
+    const updatedTask = result.rows[0];
+
+    // ============================================
+    // 8. LOG STATUS CHANGE
+    // ============================================
+
+    try {
+      await query(
+        `
+        INSERT INTO workflow_activity_log
+        (
+          id,
+          workflow_id,
+          user_id,
+          action,
+          details
+        )
+
+        VALUES ($1, $2, $3, $4, $5)
+        `,
+        [
+          uuidv4(),
+          task.workflow_id,
+          userId,
+          'task_status_updated',
+          JSON.stringify({
+            taskId,
+            taskName: task.step_name,
+            previousStatus: task.status,
+            newStatus: status,
+            remark: normalizedNotes,
+            message: 'Task status updated',
+          }),
+        ],
+      );
+    } catch (activityError) {
+      console.error(
+        'Task status activity log error:',
+        activityError,
+      );
+    }
+
+    // ============================================
+    // 9. RESPONSE
+    // ============================================
+
+    return res.json({
       success: true,
-      data: result.rows[0],
-      message: 'Task updated successfully',
+      data: updatedTask,
+      message: 'Task status updated successfully',
     });
   } catch (error) {
-    console.error('Update task error:', error);
-    res.status(500).json({
+    console.error(
+      'Update task status error:',
+      error,
+    );
+
+    return res.status(500).json({
       success: false,
       error: 'SERVER_ERROR',
-      message: 'Failed to update task',
+      message: 'Failed to update task status',
     });
   }
 });
+
 
 // ============================================
 // 9. DELETE WORKFLOW
@@ -2155,65 +2379,29 @@ router.put('/task/:taskId', authMiddleware, async (req, res) => {
 // ============================================
 // 17. GET TASK COMMENTS 🆕
 // ============================================
+// ============================================
+// 17. GET TASK COMMENTS
+// ============================================
 router.get('/task/:taskId/comments', authMiddleware, async (req, res) => {
   try {
     const { taskId } = req.params;
-
-    const result = await query(
-      `SELECT
-                c.id,
-                c.comment,
-                c.user_id,
-                c.created_at,
-                c.updated_at,
-                u.name AS user_name,
-                u.email AS user_email
-             FROM workflow_comments c
-             LEFT JOIN users u ON u.id = c.user_id
-             WHERE c.task_id = $1
-             ORDER BY c.created_at ASC`,
-      [taskId],
-    );
-
-    res.json({
-      success: true,
-      data: {
-        comments: result.rows,
-        total: result.rows.length,
-      },
-    });
-  } catch (error) {
-    console.error('Get comments error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'SERVER_ERROR',
-      message: 'Failed to get comments',
-    });
-  }
-});
-
-// ============================================
-// 18. ADD TASK COMMENT 🆕
-// ============================================
-router.post('/task/:taskId/comments', authMiddleware, async (req, res) => {
-  try {
-    const { taskId } = req.params;
     const userId = req.user.id;
-    const { comment } = req.body;
-
-    if (!comment || !comment.trim()) {
-      return res.status(400).json({
-        success: false,
-        error: 'MISSING_COMMENT',
-        message: 'Comment text is required',
-      });
-    }
 
     const taskCheck = await query(
-      `SELECT t.id, t.workflow_id, w.organization_id
-             FROM workflow_tasks t
-             JOIN user_workflows w ON t.workflow_id = w.id
-             WHERE t.id = $1`,
+      `
+      SELECT
+        t.id,
+        t.assigned_to,
+        w.organization_id,
+        w.project_head,
+        o.created_by AS organization_owner_id
+      FROM workflow_tasks t
+      INNER JOIN user_workflows w
+        ON t.workflow_id = w.id
+      INNER JOIN organizations o
+        ON o.id = w.organization_id
+      WHERE t.id = $1
+      `,
       [taskId],
     );
 
@@ -2228,9 +2416,136 @@ router.post('/task/:taskId/comments', authMiddleware, async (req, res) => {
     const task = taskCheck.rows[0];
 
     const memberCheck = await query(
-      `SELECT role FROM org_members
-             WHERE organization_id = $1 AND user_id = $2 AND status = $3`,
-      [task.organization_id, userId, 'active'],
+      `
+      SELECT role
+      FROM org_members
+      WHERE organization_id = $1
+        AND user_id = $2
+        AND status = 'active'
+      `,
+      [task.organization_id, userId],
+    );
+
+    if (memberCheck.rows.length === 0) {
+      return res.status(403).json({
+        success: false,
+        error: 'FORBIDDEN',
+        message: 'You do not have access to these comments',
+      });
+    }
+
+    const isOwner = task.organization_owner_id === userId;
+
+    const isProjectHead = task.project_head === userId;
+
+    const isAssigned = task.assigned_to === userId;
+
+    if (!isOwner && !isProjectHead && !isAssigned) {
+      return res.status(403).json({
+        success: false,
+        error: 'FORBIDDEN',
+        message: 'You do not have access to these comments',
+      });
+    }
+
+    const result = await query(
+      `
+      SELECT
+        c.id,
+        c.task_id,
+        c.comment,
+        c.user_id,
+        c.parent_id,
+        c.created_at,
+        c.updated_at,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM workflow_comments c
+      LEFT JOIN users u
+        ON u.id = c.user_id
+      WHERE c.task_id = $1
+      ORDER BY c.created_at ASC
+      `,
+      [taskId],
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        comments: result.rows,
+        total: result.rows.length,
+      },
+    });
+  } catch (error) {
+    console.error('Get comments error:', error);
+
+    return res.status(500).json({
+      success: false,
+      error: 'SERVER_ERROR',
+      message: 'Failed to get comments',
+    });
+  }
+});
+
+// ============================================
+// 18. ADD TASK COMMENT 🆕
+// ============================================
+// ============================================
+// 18. ADD TASK COMMENT / REPLY
+// ============================================
+router.post('/task/:taskId/comments', authMiddleware, async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const userId = req.user.id;
+
+    const { comment, parentId = null } = req.body;
+
+    if (!comment || !comment.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'MISSING_COMMENT',
+        message: 'Comment text is required',
+      });
+    }
+
+    const taskCheck = await query(
+      `
+      SELECT
+        t.id,
+        t.assigned_to,
+        t.workflow_id,
+        w.organization_id,
+        w.project_head,
+        o.created_by AS organization_owner_id
+      FROM workflow_tasks t
+      INNER JOIN user_workflows w
+        ON t.workflow_id = w.id
+      INNER JOIN organizations o
+        ON o.id = w.organization_id
+      WHERE t.id = $1
+      `,
+      [taskId],
+    );
+
+    if (taskCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'TASK_NOT_FOUND',
+        message: 'Task not found',
+      });
+    }
+
+    const task = taskCheck.rows[0];
+
+    const memberCheck = await query(
+      `
+      SELECT role
+      FROM org_members
+      WHERE organization_id = $1
+        AND user_id = $2
+        AND status = 'active'
+      `,
+      [task.organization_id, userId],
     );
 
     if (memberCheck.rows.length === 0) {
@@ -2241,52 +2556,117 @@ router.post('/task/:taskId/comments', authMiddleware, async (req, res) => {
       });
     }
 
+    const isOwner = task.organization_owner_id === userId;
+
+    const isProjectHead = task.project_head === userId;
+
+    const isAssigned = task.assigned_to === userId;
+
+    if (!isOwner && !isProjectHead && !isAssigned) {
+      return res.status(403).json({
+        success: false,
+        error: 'FORBIDDEN',
+        message: 'You do not have permission to comment',
+      });
+    }
+
+    // ============================================
+    // VALIDATE REPLY PARENT
+    // ============================================
+    if (parentId) {
+      const parentCheck = await query(
+        `
+        SELECT id
+        FROM workflow_comments
+        WHERE id = $1
+          AND task_id = $2
+        `,
+        [parentId, taskId],
+      );
+
+      if (parentCheck.rows.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_PARENT',
+          message: 'Reply target comment not found',
+        });
+      }
+    }
+
     const commentId = uuidv4();
 
     await query(
-      `INSERT INTO workflow_comments (id, task_id, user_id, comment)
-             VALUES ($1, $2, $3, $4)`,
-      [commentId, taskId, userId, comment.trim()],
+      `
+      INSERT INTO workflow_comments
+      (
+        id,
+        task_id,
+        user_id,
+        comment,
+        parent_id
+      )
+      VALUES ($1, $2, $3, $4, $5)
+      `,
+      [commentId, taskId, userId, comment.trim(), parentId],
     );
 
     await query(
-      `INSERT INTO workflow_activity_log (id, workflow_id, user_id, action, details)
-             VALUES ($1, $2, $3, $4, $5)`,
+      `
+      INSERT INTO workflow_activity_log
+      (
+        id,
+        workflow_id,
+        user_id,
+        action,
+        details
+      )
+      VALUES ($1, $2, $3, $4, $5)
+      `,
       [
         uuidv4(),
         task.workflow_id,
         userId,
-        'comment_added',
+        parentId ? 'comment_reply_added' : 'comment_added',
         JSON.stringify({
           taskId,
+          parentId,
           comment: comment.trim(),
-          message: 'Comment added',
+          message: parentId ? 'Comment reply added' : 'Comment added',
         }),
       ],
     );
 
     const result = await query(
-      `SELECT
-                c.id,
-                c.comment,
-                c.user_id,
-                c.created_at,
-                u.name AS user_name,
-                u.email AS user_email
-             FROM workflow_comments c
-             LEFT JOIN users u ON u.id = c.user_id
-             WHERE c.id = $1`,
+      `
+      SELECT
+        c.id,
+        c.task_id,
+        c.comment,
+        c.user_id,
+        c.parent_id,
+        c.created_at,
+        c.updated_at,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM workflow_comments c
+      LEFT JOIN users u
+        ON u.id = c.user_id
+      WHERE c.id = $1
+      `,
       [commentId],
     );
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       data: result.rows[0],
-      message: 'Comment added successfully',
+      message: parentId
+        ? 'Reply added successfully'
+        : 'Comment added successfully',
     });
   } catch (error) {
     console.error('Add comment error:', error);
-    res.status(500).json({
+
+    return res.status(500).json({
       success: false,
       error: 'SERVER_ERROR',
       message: 'Failed to add comment',
@@ -2370,7 +2750,6 @@ router.get('/task/:taskId/activity', authMiddleware, async (req, res) => {
     });
   }
 });
-
 
 // ============================================
 // 20. GET WORKFLOW MEMBERS (Project-specific)
